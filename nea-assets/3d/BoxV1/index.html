@@ -3,39 +3,94 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>One-Model 3D Viewer</title>
+  <title>One-Model 3D Viewer (robust)</title>
+  <meta name="color-scheme" content="dark light">
   <style>
-    body,html{margin:0;height:100%;overflow:hidden;background:#0b1220;color:white;font-family:sans-serif}
+    :root { --bg:#0b1220; --fg:#eaf1ff; --muted:#9db0d6; --accent:#4ea1ff; }
+    html,body{height:100%;margin:0}
+    body{background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Inter,Roboto,Arial,sans-serif;overflow:hidden}
     #viewer{position:fixed;inset:0}
     canvas{display:block;width:100%;height:100%}
-    .credit{position:absolute;right:10px;bottom:10px;font-size:.8rem;color:#a9b7d8;opacity:.8}
-    .credit a{color:#4ea1ff;text-decoration:none}
+    .credit{position:absolute;right:10px;bottom:10px;font-size:.8rem;color:var(--muted);opacity:.85}
+    .credit a{color:var(--accent);text-decoration:none}
+    #msg{position:absolute;left:50%;top:14px;transform:translateX(-50%);background:#0009;border:1px solid #ffffff29;
+         padding:.5rem .75rem;border-radius:10px;font-size:.9rem;opacity:0;transition:opacity .2s}
+    #msg.show{opacity:1}
   </style>
 </head>
 <body>
   <div id="viewer">
+    <div id="msg"></div>
     <div class="credit">Powered by <a href="https://threejs.org/" target="_blank" rel="noopener">three.js</a></div>
   </div>
 
-  <!-- Three.js & loaders (with defer so they load before our script runs) -->
-  <script src="https://unpkg.com/three@0.161.0/build/three.min.js" defer></script>
-  <script src="https://unpkg.com/three@0.161.0/examples/js/controls/OrbitControls.js" defer></script>
-  <script src="https://unpkg.com/three@0.161.0/examples/js/loaders/OBJLoader.js" defer></script>
+  <script>
+    // ---------- Helper: message toast ----------
+    const toast = (t,ms=1500)=>{ const el=document.getElementById('msg'); el.textContent=t; el.classList.add('show');
+      clearTimeout(el._to); el._to=setTimeout(()=>el.classList.remove('show'), ms); };
 
-  <!-- Main script -->
-  <script defer>
-    const viewer = document.getElementById('viewer');
+    // ---------- Robust loader: tries local -> jsDelivr -> unpkg -> cdnjs ----------
+    // Pinned version chosen for long-term stability (r128 / 0.128.0)
+    const V = { semver: '0.128.0', rev: 'r128' };
+
+    const SOURCES = {
+      three: [
+        './lib/three.min.js',
+        `https://cdn.jsdelivr.net/npm/three@${V.semver}/build/three.min.js`,
+        `https://unpkg.com/three@${V.semver}/build/three.min.js`,
+        `https://cdnjs.cloudflare.com/ajax/libs/three.js/${V.rev}/three.min.js`,
+      ],
+      orbit: [
+        './lib/OrbitControls.js',
+        `https://cdn.jsdelivr.net/npm/three@${V.semver}/examples/js/controls/OrbitControls.js`,
+        `https://unpkg.com/three@${V.semver}/examples/js/controls/OrbitControls.js`,
+        `https://cdnjs.cloudflare.com/ajax/libs/three.js/${V.rev}/examples/js/controls/OrbitControls.js`,
+      ],
+      obj: [
+        './lib/OBJLoader.js',
+        `https://cdn.jsdelivr.net/npm/three@${V.semver}/examples/js/loaders/OBJLoader.js`,
+        `https://unpkg.com/three@${V.semver}/examples/js/loaders/OBJLoader.js`,
+        `https://cdnjs.cloudflare.com/ajax/libs/three.js/${V.rev}/examples/js/loaders/OBJLoader.js`,
+      ]
+    };
+
+    function loadScriptFrom(list){
+      return new Promise((resolve,reject)=>{
+        let i = 0;
+        const tryNext = ()=>{
+          if(i >= list.length) return reject(new Error('All sources failed'));
+          const url = list[i++];
+          const s = document.createElement('script');
+          s.src = url;
+          s.async = false; // preserve order
+          s.onload = ()=> resolve(url);
+          s.onerror = ()=> { console.warn('Failed:', url); tryNext(); };
+          document.head.appendChild(s);
+        };
+        tryNext();
+      });
+    }
+
+    async function loadAllLibs(){
+      toast('Loading 3D engine…');
+      const threeUrl = await loadScriptFrom(SOURCES.three);
+      const orbitUrl = await loadScriptFrom(SOURCES.orbit);
+      const objUrl   = await loadScriptFrom(SOURCES.obj);
+      console.log('Loaded:', { threeUrl, orbitUrl, objUrl });
+      toast('3D engine ready', 900);
+    }
+
+    // ---------- Viewer logic (uses global THREE from r128) ----------
     let renderer, scene, camera, controls, model;
-
-    function init(){
-      const w = window.innerWidth;
-      const h = window.innerHeight;
-      renderer = new THREE.WebGLRenderer({antialias:true,alpha:true});
+    function initViewer(){
+      const viewer = document.getElementById('viewer');
+      const w = window.innerWidth, h = window.innerHeight;
+      renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.setSize(w,h); viewer.appendChild(renderer.domElement);
 
       scene = new THREE.Scene();
-      camera = new THREE.PerspectiveCamera(50, w/h, 0.01, 1000);
+      camera = new THREE.PerspectiveCamera(50, w/h, 0.01, 2000);
       camera.position.set(2.5, 1.6, 3.2);
 
       controls = new THREE.OrbitControls(camera, renderer.domElement);
@@ -43,41 +98,34 @@
       controls.target.set(0,0.8,0);
 
       scene.add(new THREE.AmbientLight(0xffffff, .6));
-      const key = new THREE.DirectionalLight(0xffffff, 1.2); 
-      key.position.set(5,6,8); 
-      scene.add(key);
-      const rim = new THREE.DirectionalLight(0xffffff, .6); 
-      rim.position.set(-6,4,-6); 
-      scene.add(rim);
+      const key = new THREE.DirectionalLight(0xffffff, 1.2); key.position.set(5,6,8); scene.add(key);
+      const rim = new THREE.DirectionalLight(0xffffff, .6);  rim.position.set(-6,4,-6); scene.add(rim);
 
+      // Load fixed file: main.obj (same folder)
       loadOBJ('main.obj');
 
-      animate();
-      window.addEventListener('resize', onResize);
-    }
+      window.addEventListener('resize', ()=>{
+        const W = window.innerWidth, H = window.innerHeight;
+        renderer.setSize(W,H); camera.aspect = W/H; camera.updateProjectionMatrix();
+      });
 
-    function onResize(){
-      const w = window.innerWidth;
-      const h = window.innerHeight;
-      renderer.setSize(w,h); 
-      camera.aspect=w/h; 
-      camera.updateProjectionMatrix();
-    }
-
-    function animate(){
-      requestAnimationFrame(animate);
-      controls.update();
-      renderer.render(scene, camera);
+      (function animate(){
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+      })();
     }
 
     function loadOBJ(url){
       const loader = new THREE.OBJLoader();
-      loader.load(url,(obj)=>{
-        model = obj; 
-        scene.add(model);
-        normalizeModel();
-        frameModel();
-      }, undefined, (err)=> console.error('OBJ error: ',err));
+      loader.load(url, (obj)=>{
+        model = obj; scene.add(model);
+        normalizeModel(); frameModel();
+        toast('Loaded main.obj', 1100);
+      }, undefined, (err)=>{
+        console.error('OBJ error:', err);
+        toast('Could not load main.obj — check it is next to this HTML file.', 2500);
+      });
     }
 
     function normalizeModel(){
@@ -87,8 +135,7 @@
       const center = new THREE.Vector3(); box.getCenter(center);
       model.position.sub(center);
       const maxDim = Math.max(size.x,size.y,size.z) || 1;
-      const scale = 1.4 / maxDim;
-      model.scale.setScalar(scale);
+      const scale = 1.4 / maxDim; model.scale.setScalar(scale);
     }
 
     function frameModel(){
@@ -102,13 +149,70 @@
       const dir = new THREE.Vector3(2.5,1.6,3.2).normalize();
       camera.position.copy(center.clone().add(dir.multiplyScalar(fitDist*1.6)));
       camera.near = Math.max(0.01, maxDim/1000);
-      camera.far = Math.max(500, maxDim*10);
-      camera.updateProjectionMatrix();
-      controls.update();
+      camera.far  = Math.max(500,  maxDim*10);
+      camera.updateProjectionMatrix(); controls.update();
     }
 
-    // start after everything is loaded
-    window.addEventListener('DOMContentLoaded', init);
+    // ---------- Service Worker to cache libs + model for offline longevity ----------
+    const SW_CODE = `
+      const CACHE = 'one-model-viewer-v1';
+      const toCache = [
+        location.href,
+        'main.obj',
+        // Libs will be cached on first use due to fetch handler
+      ];
+      self.addEventListener('install', e=>{
+        e.waitUntil(caches.open(CACHE).then(c=>c.addAll(toCache).catch(()=>{})));
+        self.skipWaiting();
+      });
+      self.addEventListener('activate', e=>{ e.waitUntil(self.clients.claim()); });
+      self.addEventListener('fetch', e=>{
+        // Network-first for CDN libs, fallback to cache; cache-first for same-origin assets
+        const u = new URL(e.request.url);
+        const isCDN = /cdn.jsdelivr.net|unpkg.com|cdnjs.cloudflare.com/.test(u.host);
+        if(isCDN){
+          e.respondWith((async ()=>{
+            try{
+              const net = await fetch(e.request);
+              const c = await caches.open(CACHE); c.put(e.request, net.clone());
+              return net;
+            }catch{
+              const hit = await caches.match(e.request); if(hit) return hit;
+              throw new Error('offline and not cached');
+            }
+          })());
+        } else {
+          e.respondWith(caches.match(e.request).then(r=> r || fetch(e.request).then(res=>{
+            const copy = res.clone(); caches.open(CACHE).then(c=>c.put(e.request, copy)).catch(()=>{});
+            return res;
+          })));
+        }
+      });
+    `;
+
+    async function registerSW(){
+      if('serviceWorker' in navigator){
+        try{
+          const blob = new Blob([SW_CODE], { type: 'text/javascript' });
+          const url = URL.createObjectURL(blob);
+          await navigator.serviceWorker.register(url, { scope: './' });
+          toast('Offline cache ready', 900);
+        }catch(e){ console.warn('SW register failed', e); }
+      }
+    }
+
+    // Boot
+    (async function(){
+      try{
+        await loadAllLibs();
+        if(typeof THREE === 'undefined') throw new Error('THREE not found after loading.');
+        initViewer();
+        registerSW();
+      }catch(e){
+        console.error(e);
+        toast('Failed to load 3D engine. Check network or add local libs in ./lib', 3000);
+      }
+    })();
   </script>
 </body>
 </html>
