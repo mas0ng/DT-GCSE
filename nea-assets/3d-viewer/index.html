@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>One-Model 3D Viewer (robust)</title>
+  <title>3D viewer</title>
   <meta name="color-scheme" content="dark light">
   <style>
     :root { --bg:#0b1220; --fg:#eaf1ff; --muted:#9db0d6; --accent:#4ea1ff; }
@@ -13,78 +13,78 @@
     canvas{display:block;width:100%;height:100%}
     .credit{position:absolute;right:10px;bottom:10px;font-size:.8rem;color:var(--muted);opacity:.85}
     .credit a{color:var(--accent);text-decoration:none}
-    #msg{position:absolute;left:50%;top:14px;transform:translateX(-50%);background:#0009;border:1px solid #ffffff29;
-         padding:.5rem .75rem;border-radius:10px;font-size:.9rem;opacity:0;transition:opacity .2s}
-    #msg.show{opacity:1}
+    #toast{position:absolute;left:50%;top:12px;transform:translateX(-50%);background:#0009;border:1px solid #ffffff29;
+           padding:.5rem .75rem;border-radius:10px;font-size:.9rem;opacity:0;transition:opacity .2s;max-width:92vw}
+    #toast.show{opacity:1}
+    #err{position:fixed;inset:auto 12px 12px 12px;background:#2a0f13;border:1px solid #ff6b6b55;color:#ffd7d7;
+         padding:.8rem 1rem;border-radius:12px;font-size:.92rem;display:none;white-space:pre-wrap}
+    #err b{color:#fff}
   </style>
 </head>
 <body>
   <div id="viewer">
-    <div id="msg"></div>
+    <div id="toast"></div>
+    <div id="err"></div>
     <div class="credit">Powered by <a href="https://threejs.org/" target="_blank" rel="noopener">three.js</a></div>
   </div>
 
-  <script>
-    // ---------- Helper: message toast ----------
-    const toast = (t,ms=1500)=>{ const el=document.getElementById('msg'); el.textContent=t; el.classList.add('show');
+  <!-- Pinned r128 CDNs for long-term stability -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/MTLLoader.js" defer></script>
+
+  <script defer>
+    const toast = (t,ms=1600)=>{ const el=document.getElementById('toast'); el.textContent=t; el.classList.add('show');
       clearTimeout(el._to); el._to=setTimeout(()=>el.classList.remove('show'), ms); };
+    const showErr = (txt)=>{ const el=document.getElementById('err'); el.textContent=txt; el.style.display='block'; };
 
-    // ---------- Robust loader: tries local -> jsDelivr -> unpkg -> cdnjs ----------
-    // Pinned version chosen for long-term stability (r128 / 0.128.0)
-    const V = { semver: '0.128.0', rev: 'r128' };
-
-    const SOURCES = {
-      three: [
-        './lib/three.min.js',
-        `https://cdn.jsdelivr.net/npm/three@${V.semver}/build/three.min.js`,
-        `https://unpkg.com/three@${V.semver}/build/three.min.js`,
-        `https://cdnjs.cloudflare.com/ajax/libs/three.js/${V.rev}/three.min.js`,
-      ],
-      orbit: [
-        './lib/OrbitControls.js',
-        `https://cdn.jsdelivr.net/npm/three@${V.semver}/examples/js/controls/OrbitControls.js`,
-        `https://unpkg.com/three@${V.semver}/examples/js/controls/OrbitControls.js`,
-        `https://cdnjs.cloudflare.com/ajax/libs/three.js/${V.rev}/examples/js/controls/OrbitControls.js`,
-      ],
-      obj: [
-        './lib/OBJLoader.js',
-        `https://cdn.jsdelivr.net/npm/three@${V.semver}/examples/js/loaders/OBJLoader.js`,
-        `https://unpkg.com/three@${V.semver}/examples/js/loaders/OBJLoader.js`,
-        `https://cdnjs.cloudflare.com/ajax/libs/three.js/${V.rev}/examples/js/loaders/OBJLoader.js`,
-      ]
-    };
-
-    function loadScriptFrom(list){
-      return new Promise((resolve,reject)=>{
-        let i = 0;
-        const tryNext = ()=>{
-          if(i >= list.length) return reject(new Error('All sources failed'));
-          const url = list[i++];
-          const s = document.createElement('script');
-          s.src = url;
-          s.async = false; // preserve order
-          s.onload = ()=> resolve(url);
-          s.onerror = ()=> { console.warn('Failed:', url); tryNext(); };
-          document.head.appendChild(s);
-        };
-        tryNext();
-      });
+    // Read ?ref=<name>  → assets/<ref>/model.obj + model.mtl (+ textures referenced in .mtl)
+    function getRef(){
+      const p = new URLSearchParams(location.search);
+      const ref = (p.get('ref')||'').trim();
+      return ref || null;
     }
 
-    async function loadAllLibs(){
-      toast('Loading 3D engine…');
-      const threeUrl = await loadScriptFrom(SOURCES.three);
-      const orbitUrl = await loadScriptFrom(SOURCES.orbit);
-      const objUrl   = await loadScriptFrom(SOURCES.obj);
-      console.log('Loaded:', { threeUrl, orbitUrl, objUrl });
-      toast('3D engine ready', 900);
+    function getFolderURLForRef(ref){
+      // Ensures correct resolution under GitHub Pages project paths
+      return new URL(`assets/${encodeURIComponent(ref)}/`, location.href).href;
     }
 
-    // ---------- Viewer logic (uses global THREE from r128) ----------
+    function checkLibs(){
+      if(typeof THREE === 'undefined'){
+        showErr("Failed to load three.js.\nCheck network/CSP and that the CDN is reachable.");
+        throw new Error('THREE undefined');
+      }
+      if(typeof THREE.OBJLoader === 'undefined'){
+        showErr("Failed to load OBJLoader.js for this three.js version.");
+        throw new Error('OBJLoader missing');
+      }
+      if(typeof THREE.MTLLoader === 'undefined'){
+        showErr("Failed to load MTLLoader.js for this three.js version.");
+        throw new Error('MTLLoader missing');
+      }
+      if(typeof THREE.OrbitControls === 'undefined'){
+        showErr("Failed to load OrbitControls.js for this three.js version.");
+        throw new Error('OrbitControls missing');
+      }
+    }
+
     let renderer, scene, camera, controls, model;
-    function initViewer(){
+
+    function init(){
+      document.title = '3D viewer'; // ensure title is always exactly this
+      checkLibs();
+
+      const ref = getRef();
+      if(!ref){
+        showErr(`No ref provided.\n\nUsage:\n${location.pathname.split('/').pop()}?ref=box\n\nExpected files:\nassets/box/model.obj\nassets/box/model.mtl\n(+ any textures referenced by model.mtl)`);
+        return;
+      }
+
       const viewer = document.getElementById('viewer');
       const w = window.innerWidth, h = window.innerHeight;
+
       renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.setSize(w,h); viewer.appendChild(renderer.domElement);
@@ -94,15 +94,13 @@
       camera.position.set(2.5, 1.6, 3.2);
 
       controls = new THREE.OrbitControls(camera, renderer.domElement);
-      controls.enableDamping = true;
-      controls.target.set(0,0.8,0);
+      controls.enableDamping = true; controls.target.set(0,0.8,0);
 
       scene.add(new THREE.AmbientLight(0xffffff, .6));
       const key = new THREE.DirectionalLight(0xffffff, 1.2); key.position.set(5,6,8); scene.add(key);
       const rim = new THREE.DirectionalLight(0xffffff, .6);  rim.position.set(-6,4,-6); scene.add(rim);
 
-      // Load fixed file: main.obj (same folder)
-      loadOBJ('main.obj');
+      loadOBJWithMTL(ref);
 
       window.addEventListener('resize', ()=>{
         const W = window.innerWidth, H = window.innerHeight;
@@ -116,16 +114,59 @@
       })();
     }
 
-    function loadOBJ(url){
-      const loader = new THREE.OBJLoader();
-      loader.load(url, (obj)=>{
-        model = obj; scene.add(model);
-        normalizeModel(); frameModel();
-        toast('Loaded main.obj', 1100);
+    function loadOBJWithMTL(ref){
+      const folder = getFolderURLForRef(ref);         // e.g. .../assets/box/
+      const objUrl = new URL('model.obj', folder).href;
+      const mtlUrl = new URL('model.mtl', folder).href;
+
+      toast(`Loading "${ref}"…`);
+      console.log('Loading MTL:', mtlUrl);
+      console.log('Loading OBJ:', objUrl);
+
+      const mtlLoader = new THREE.MTLLoader();
+      mtlLoader.setResourcePath(folder);  // so texture paths in .mtl resolve within this folder
+      mtlLoader.setPath(folder);          // for .mtl internal references
+
+      mtlLoader.load(mtlUrl, (materials)=>{
+        materials.preload();
+        const objLoader = new THREE.OBJLoader();
+        objLoader.setMaterials(materials);
+        objLoader.setPath(folder);
+        objLoader.load('model.obj', (obj)=>{
+          model = obj; scene.add(model);
+          normalizeModel(); frameModel();
+          toast('Model loaded');
+        }, undefined, (err)=>{
+          console.error('OBJ load error:', err);
+          showErr(errorNote(ref, objUrl, 'OBJ'));
+        });
       }, undefined, (err)=>{
-        console.error('OBJ error:', err);
-        toast('Could not load main.obj — check it is next to this HTML file.', 2500);
+        console.warn('MTL load failed, attempting raw OBJ without materials.', err);
+        // Fallback: try loading OBJ anyway (will appear grey)
+        const objLoader = new THREE.OBJLoader();
+        objLoader.setPath(folder);
+        objLoader.load('model.obj', (obj)=>{
+          model = obj; scene.add(model);
+          normalizeModel(); frameModel();
+          toast('Model loaded (no .mtl found)');
+        }, undefined, (e)=>{
+          console.error('OBJ load error (fallback):', e);
+          showErr(errorNote(ref, objUrl, 'OBJ/MTL'));
+        });
       });
+    }
+
+    function errorNote(ref, triedURL, kind){
+      return `Could not load ${kind} for ref="${ref}".
+
+URL tried:
+${triedURL}
+
+Check:
+• The folder exists: assets/${ref}/
+• The files exist and are spelled exactly: model.obj, model.mtl (case-sensitive on GitHub Pages)
+• Any textures referenced in model.mtl are in the same folder.
+• Open the OBJ/MTL URLs directly in a new tab to verify they don’t 404.`;
     }
 
     function normalizeModel(){
@@ -153,66 +194,7 @@
       camera.updateProjectionMatrix(); controls.update();
     }
 
-    // ---------- Service Worker to cache libs + model for offline longevity ----------
-    const SW_CODE = `
-      const CACHE = 'one-model-viewer-v1';
-      const toCache = [
-        location.href,
-        'main.obj',
-        // Libs will be cached on first use due to fetch handler
-      ];
-      self.addEventListener('install', e=>{
-        e.waitUntil(caches.open(CACHE).then(c=>c.addAll(toCache).catch(()=>{})));
-        self.skipWaiting();
-      });
-      self.addEventListener('activate', e=>{ e.waitUntil(self.clients.claim()); });
-      self.addEventListener('fetch', e=>{
-        // Network-first for CDN libs, fallback to cache; cache-first for same-origin assets
-        const u = new URL(e.request.url);
-        const isCDN = /cdn.jsdelivr.net|unpkg.com|cdnjs.cloudflare.com/.test(u.host);
-        if(isCDN){
-          e.respondWith((async ()=>{
-            try{
-              const net = await fetch(e.request);
-              const c = await caches.open(CACHE); c.put(e.request, net.clone());
-              return net;
-            }catch{
-              const hit = await caches.match(e.request); if(hit) return hit;
-              throw new Error('offline and not cached');
-            }
-          })());
-        } else {
-          e.respondWith(caches.match(e.request).then(r=> r || fetch(e.request).then(res=>{
-            const copy = res.clone(); caches.open(CACHE).then(c=>c.put(e.request, copy)).catch(()=>{});
-            return res;
-          })));
-        }
-      });
-    `;
-
-    async function registerSW(){
-      if('serviceWorker' in navigator){
-        try{
-          const blob = new Blob([SW_CODE], { type: 'text/javascript' });
-          const url = URL.createObjectURL(blob);
-          await navigator.serviceWorker.register(url, { scope: './' });
-          toast('Offline cache ready', 900);
-        }catch(e){ console.warn('SW register failed', e); }
-      }
-    }
-
-    // Boot
-    (async function(){
-      try{
-        await loadAllLibs();
-        if(typeof THREE === 'undefined') throw new Error('THREE not found after loading.');
-        initViewer();
-        registerSW();
-      }catch(e){
-        console.error(e);
-        toast('Failed to load 3D engine. Check network or add local libs in ./lib', 3000);
-      }
-    })();
+    window.addEventListener('DOMContentLoaded', init);
   </script>
 </body>
 </html>
