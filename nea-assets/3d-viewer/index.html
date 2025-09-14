@@ -71,7 +71,7 @@
 
       const ref = getRef();
       if(!ref){
-        showErr(`No ref provided.\n\nUsage:\n${location.pathname.split('/').pop()}?ref=box\n\nExpected files (prefer GLB):\nassets/box/model.glb\n\nFallback (OBJ+MTL):\nassets/box/model.obj\nassets/box/model.mtl\n(+ textures referenced in model.mtl)`);
+        showErr(`No ref provided.\n\nPlease ensure that you are using an official link / QR Code`);
         return;
       }
 
