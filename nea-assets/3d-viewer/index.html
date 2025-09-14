@@ -31,6 +31,7 @@
   <!-- Pinned r128 CDNs for long-term stability -->
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/MTLLoader.js" defer></script>
 
@@ -39,52 +40,44 @@
       clearTimeout(el._to); el._to=setTimeout(()=>el.classList.remove('show'), ms); };
     const showErr = (txt)=>{ const el=document.getElementById('err'); el.textContent=txt; el.style.display='block'; };
 
-    // Read ?ref=<name>  → assets/<ref>/model.obj + model.mtl (+ textures referenced in .mtl)
     function getRef(){
       const p = new URLSearchParams(location.search);
       const ref = (p.get('ref')||'').trim();
       return ref || null;
     }
-
-    function getFolderURLForRef(ref){
-      // Ensures correct resolution under GitHub Pages project paths
+    function folderFor(ref){
+      // Absolute URL to the assets folder (handles GH Pages subpaths)
       return new URL(`assets/${encodeURIComponent(ref)}/`, location.href).href;
     }
 
     function checkLibs(){
-      if(typeof THREE === 'undefined'){
-        showErr("Failed to load three.js.\nCheck network/CSP and that the CDN is reachable.");
-        throw new Error('THREE undefined');
-      }
-      if(typeof THREE.OBJLoader === 'undefined'){
-        showErr("Failed to load OBJLoader.js for this three.js version.");
-        throw new Error('OBJLoader missing');
-      }
-      if(typeof THREE.MTLLoader === 'undefined'){
-        showErr("Failed to load MTLLoader.js for this three.js version.");
-        throw new Error('MTLLoader missing');
-      }
-      if(typeof THREE.OrbitControls === 'undefined'){
-        showErr("Failed to load OrbitControls.js for this three.js version.");
-        throw new Error('OrbitControls missing');
-      }
+      if(typeof THREE === 'undefined') throw new Error('THREE undefined');
+      if(!THREE.OrbitControls) throw new Error('OrbitControls missing');
+      // GLTF is preferred, but we also include OBJ/MTL as fallback
+      if(!THREE.GLTFLoader) throw new Error('GLTFLoader missing');
+      if(!THREE.OBJLoader) console.warn('OBJLoader missing (fallback will not work).');
+      if(!THREE.MTLLoader) console.warn('MTLLoader missing (materials for OBJ will not work).');
     }
 
     let renderer, scene, camera, controls, model;
 
     function init(){
-      document.title = '3D viewer'; // ensure title is always exactly this
-      checkLibs();
-
-      const ref = getRef();
-      if(!ref){
-        showErr(`No ref provided.\n\nUsage:\n${location.pathname.split('/').pop()}?ref=box\n\nExpected files:\nassets/box/model.obj\nassets/box/model.mtl\n(+ any textures referenced by model.mtl)`);
+      document.title = '3D viewer';
+      try { checkLibs(); } catch(e){
+        showErr("Failed to load a required three.js script. Check your network/CSP and CDN reachability.");
+        console.error(e);
         return;
       }
 
+      const ref = getRef();
+      if(!ref){
+        showErr(`No ref provided.\n\nUsage:\n${location.pathname.split('/').pop()}?ref=box\n\nExpected files (prefer GLB):\nassets/box/model.glb\n\nFallback (OBJ+MTL):\nassets/box/model.obj\nassets/box/model.mtl\n(+ textures referenced in model.mtl)`);
+        return;
+      }
+
+      // Scene setup
       const viewer = document.getElementById('viewer');
       const w = window.innerWidth, h = window.innerHeight;
-
       renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.setSize(w,h); viewer.appendChild(renderer.domElement);
@@ -100,7 +93,7 @@
       const key = new THREE.DirectionalLight(0xffffff, 1.2); key.position.set(5,6,8); scene.add(key);
       const rim = new THREE.DirectionalLight(0xffffff, .6);  rim.position.set(-6,4,-6); scene.add(rim);
 
-      loadOBJWithMTL(ref);
+      loadModel(ref);
 
       window.addEventListener('resize', ()=>{
         const W = window.innerWidth, H = window.innerHeight;
@@ -114,20 +107,45 @@
       })();
     }
 
-    function loadOBJWithMTL(ref){
-      const folder = getFolderURLForRef(ref);         // e.g. .../assets/box/
+    function loadModel(ref){
+      const folder = folderFor(ref); // e.g., .../assets/box/
+      const glbUrl = new URL('model.glb', folder).href;
+
+      toast(`Loading "${ref}" (GLB)…`);
+      console.log('Trying GLB:', glbUrl);
+
+      const gltfLoader = new THREE.GLTFLoader();
+      gltfLoader.load(glbUrl, (gltf)=>{
+        // GLB success
+        model = gltf.scene || gltf.scenes?.[0];
+        if(!model){ showErr('GLB loaded but scene is empty.'); return; }
+        scene.add(model);
+        normalizeModel(); frameModel();
+        toast('GLB loaded');
+      }, undefined, (glbErr)=>{
+        console.warn('GLB load failed, trying OBJ+MTL fallback.', glbErr);
+        loadOBJWithMTL(ref, folder);
+      });
+    }
+
+    function loadOBJWithMTL(ref, folder){
       const objUrl = new URL('model.obj', folder).href;
       const mtlUrl = new URL('model.mtl', folder).href;
 
-      toast(`Loading "${ref}"…`);
-      console.log('Loading MTL:', mtlUrl);
-      console.log('Loading OBJ:', objUrl);
+      toast(`Loading "${ref}" (OBJ+MTL)…`);
+      console.log('MTL:', mtlUrl);
+      console.log('OBJ:', objUrl);
+
+      if(!THREE.MTLLoader || !THREE.OBJLoader){
+        showErr(`GLB not found and OBJ/MTL loaders missing.\nPlease provide model.glb in assets/${ref}/ or include MTL/OBJ loaders.`);
+        return;
+      }
 
       const mtlLoader = new THREE.MTLLoader();
-      mtlLoader.setResourcePath(folder);  // so texture paths in .mtl resolve within this folder
-      mtlLoader.setPath(folder);          // for .mtl internal references
+      mtlLoader.setResourcePath(folder);
+      mtlLoader.setPath(folder);
 
-      mtlLoader.load(mtlUrl, (materials)=>{
+      mtlLoader.load('model.mtl', (materials)=>{
         materials.preload();
         const objLoader = new THREE.OBJLoader();
         objLoader.setMaterials(materials);
@@ -135,22 +153,21 @@
         objLoader.load('model.obj', (obj)=>{
           model = obj; scene.add(model);
           normalizeModel(); frameModel();
-          toast('Model loaded');
+          toast('OBJ+MTL loaded');
         }, undefined, (err)=>{
           console.error('OBJ load error:', err);
           showErr(errorNote(ref, objUrl, 'OBJ'));
         });
-      }, undefined, (err)=>{
-        console.warn('MTL load failed, attempting raw OBJ without materials.', err);
-        // Fallback: try loading OBJ anyway (will appear grey)
+      }, undefined, (mtlErr)=>{
+        console.warn('MTL load failed, loading raw OBJ (grey).', mtlErr);
         const objLoader = new THREE.OBJLoader();
         objLoader.setPath(folder);
         objLoader.load('model.obj', (obj)=>{
           model = obj; scene.add(model);
           normalizeModel(); frameModel();
-          toast('Model loaded (no .mtl found)');
-        }, undefined, (e)=>{
-          console.error('OBJ load error (fallback):', e);
+          toast('OBJ loaded (no .mtl)');
+        }, undefined, (objErr)=>{
+          console.error('OBJ load error (fallback):', objErr);
           showErr(errorNote(ref, objUrl, 'OBJ/MTL'));
         });
       });
@@ -163,10 +180,11 @@ URL tried:
 ${triedURL}
 
 Check:
-• The folder exists: assets/${ref}/
-• The files exist and are spelled exactly: model.obj, model.mtl (case-sensitive on GitHub Pages)
-• Any textures referenced in model.mtl are in the same folder.
-• Open the OBJ/MTL URLs directly in a new tab to verify they don’t 404.`;
+• Folder exists: assets/${ref}/
+• For GLB: file exists as model.glb
+• For OBJ: files exist and are spelled exactly: model.obj, model.mtl (case-sensitive)
+• Any textures referenced in model.mtl are in the same folder
+• Open the GLB/OBJ/MTL URLs directly in a new tab to verify they don’t 404.`;
     }
 
     function normalizeModel(){
