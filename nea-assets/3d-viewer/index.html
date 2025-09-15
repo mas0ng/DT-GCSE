@@ -6,26 +6,102 @@
   <title>3D viewer</title>
   <meta name="color-scheme" content="dark light">
   <style>
-    :root { --bg:#0b1220; --fg:#eaf1ff; --muted:#9db0d6; --accent:#4ea1ff; }
+    :root { --bg:#0b1220; --fg:#eaf1ff; --muted:#9db0d6; --accent:#4ea1ff; --card:#0f1a33; --error:#2a0f13; --errorBorder:#ff6b6b55; --success:#0f2a1a; }
     html,body{height:100%;margin:0}
     body{background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Inter,Roboto,Arial,sans-serif;overflow:hidden}
     #viewer{position:fixed;inset:0}
     canvas{display:block;width:100%;height:100%}
-    .credit{position:absolute;right:10px;bottom:10px;font-size:.8rem;color:var(--muted);opacity:.85}
+    .credit{position:absolute;right:10px;bottom:10px;font-size:.8rem;color:var(--muted);opacity:.85;z-index:2}
     .credit a{color:var(--accent);text-decoration:none}
     #toast{position:absolute;left:50%;top:12px;transform:translateX(-50%);background:#0009;border:1px solid #ffffff29;
-           padding:.5rem .75rem;border-radius:10px;font-size:.9rem;opacity:0;transition:opacity .2s;max-width:92vw}
+           padding:.5rem .75rem;border-radius:10px;font-size:.9rem;opacity:0;transition:opacity .2s;max-width:92vw;z-index:3}
     #toast.show{opacity:1}
-    #err{position:fixed;inset:auto 12px 12px 12px;background:#2a0f13;border:1px solid #ff6b6b55;color:#ffd7d7;
-         padding:.8rem 1rem;border-radius:12px;font-size:.92rem;display:none;white-space:pre-wrap}
-    #err b{color:#fff}
+
+    /* Fullscreen overlay (used for loading + error) */
+    .overlay{
+      position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+      background:linear-gradient(180deg, rgba(5,9,18,.95), rgba(5,9,18,.92));
+      z-index:4; padding:24px;
+    }
+    .overlay.hidden{display:none}
+    .panel{
+      width:min(560px, 92vw);
+      background:linear-gradient(180deg, #0f1a33aa, #0b122088);
+      border:1px solid #ffffff22;
+      box-shadow:0 10px 40px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.06);
+      border-radius:16px; padding:20px 18px; text-align:center; backdrop-filter: blur(6px);
+    }
+    .title{font-size:1.2rem; font-weight:700; margin:6px 0 2px}
+    .sub{color:var(--muted); font-size:.95rem; margin:0 0 14px}
+    .row{display:flex; align-items:center; justify-content:center; gap:12px}
+
+    /* Spinner */
+    .spinner{
+      width:44px; height:44px; border-radius:50%; border:3px solid transparent;
+      border-top-color:var(--accent); border-right-color:var(--accent);
+      animation:spin .9s linear infinite;
+      filter: drop-shadow(0 0 10px rgba(78,161,255,.55));
+    }
+    @keyframes spin{to{transform:rotate(360deg)}}
+
+    /* Progress bar */
+    .bar{
+      height:8px; width:100%; background:#ffffff12; border-radius:999px; overflow:hidden;
+      border:1px solid #ffffff1a;
+    }
+    .fill{
+      height:100%; width:0%; background:linear-gradient(90deg, var(--accent), #7cc1ff);
+      transition:width .18s ease; box-shadow:0 0 16px #4ea1ff66 inset;
+    }
+    .pct{min-width:3ch; text-align:right; font-variant-numeric:tabular-nums; color:#cfe3ff}
+
+    /* Buttons */
+    .btn{
+      display:inline-flex; align-items:center; justify-content:center; gap:.5rem;
+      padding:.6rem .9rem; border-radius:10px; border:1px solid #ffffff2a; text-decoration:none; cursor:pointer;
+      color:var(--fg); background:#ffffff10;
+    }
+    .btn:hover{background:#ffffff18}
+    .btn.primary{background:linear-gradient(180deg, #2b7eea, #2466be); border-color:#2a6bc7}
+    .btn.primary:hover{filter:brightness(1.05)}
+    .stack{display:flex; flex-direction:column; gap:14px; align-items:stretch; margin-top:12px}
+
+    /* Error state tweaks */
+    .panel.error{background:linear-gradient(180deg, var(--error), #1a0a0d); border-color:var(--errorBorder)}
+    .panel.success{background:linear-gradient(180deg, var(--success), #0b1a12)}
+    pre.err{
+      text-align:left; white-space:pre-wrap; background:#0008; border:1px solid #ffffff12;
+      padding:10px; border-radius:10px; max-height:28vh; overflow:auto; color:#ffd7d7; margin:10px 0 0;
+      font-size:.88rem;
+    }
   </style>
 </head>
 <body>
   <div id="viewer">
     <div id="toast"></div>
-    <div id="err"></div>
     <div class="credit">Powered by <a href="https://threejs.org/" target="_blank" rel="noopener">three.js</a></div>
+  </div>
+
+  <!-- Fullscreen overlay (starts visible while loading) -->
+  <div id="overlay" class="overlay">
+    <div class="panel" id="overlayPanel">
+      <div class="row" style="margin-bottom:10px">
+        <div class="spinner" aria-hidden="true"></div>
+        <div>
+          <div class="title" id="overlayTitle">Preparing viewer…</div>
+          <div class="sub" id="overlaySub">Loading scripts</div>
+        </div>
+      </div>
+      <div class="row" style="gap:10px; align-items:center">
+        <div class="bar"><div class="fill" id="progressFill" style="width:0%"></div></div>
+        <div class="pct" id="progressPct">0%</div>
+      </div>
+      <div class="stack" id="overlayActions" style="display:none">
+        <a class="btn primary" id="retryBtn">Retry</a>
+        <a class="btn" id="openAssetsBtn" target="_blank" rel="noopener" style="display:none">Open asset URL</a>
+      </div>
+      <pre class="err" id="errDetail" style="display:none"></pre>
+    </div>
   </div>
 
   <!-- Pinned r128 CDNs for long-term stability -->
@@ -36,10 +112,57 @@
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/MTLLoader.js" defer></script>
 
   <script defer>
-    const toast = (t,ms=1600)=>{ const el=document.getElementById('toast'); el.textContent=t; el.classList.add('show');
+    // ===== UI helpers =====
+    const $ = (id)=>document.getElementById(id);
+    const toast = (t,ms=1600)=>{ const el=$('toast'); el.textContent=t; el.classList.add('show');
       clearTimeout(el._to); el._to=setTimeout(()=>el.classList.remove('show'), ms); };
-    const showErr = (txt)=>{ const el=document.getElementById('err'); el.textContent=txt; el.style.display='block'; };
 
+    const overlay = $('overlay');
+    const overlayTitle = $('overlayTitle');
+    const overlaySub = $('overlaySub');
+    const overlayPanel = $('overlayPanel');
+    const errDetail = $('errDetail');
+    const overlayActions = $('overlayActions');
+    const retryBtn = $('retryBtn');
+    const openAssetsBtn = $('openAssetsBtn');
+    const progressFill = $('progressFill');
+    const progressPct = $('progressPct');
+
+    let lastTriedURL = null;
+    let lastRef = null;
+
+    function setLoadingUI(title='Loading…', sub='Loading model', pct=null){
+      overlay.classList.remove('hidden');
+      overlayPanel.classList.remove('error','success');
+      errDetail.style.display='none';
+      overlayActions.style.display='none';
+      openAssetsBtn.style.display='none';
+      overlayTitle.textContent = title;
+      overlaySub.textContent = sub;
+      if (pct==null){ progressFill.style.width='0%'; progressPct.textContent='…'; }
+      else { const p = Math.max(0, Math.min(100, Math.round(pct))); progressFill.style.width = p + '%'; progressPct.textContent = p + '%'; }
+    }
+    function setProgress(loaded, total){
+      if (!total || total <= 0) { progressPct.textContent='…'; return; }
+      const pct = (loaded / total) * 100;
+      progressFill.style.width = pct + '%';
+      progressPct.textContent = Math.round(pct) + '%';
+    }
+    function hideOverlay(){ overlay.classList.add('hidden'); }
+    function showErrorOverlay(message, triedURL=null){
+      overlay.classList.remove('hidden');
+      overlayPanel.classList.add('error');
+      overlayTitle.textContent = 'We couldn’t load that model';
+      overlaySub.textContent = 'Please check the link or try again';
+      errDetail.textContent = (message || 'Unknown error') + (triedURL ? `\n\nURL tried:\n${triedURL}` : '');
+      errDetail.style.display='block';
+      overlayActions.style.display='flex';
+      if (triedURL){ openAssetsBtn.style.display='inline-flex'; openAssetsBtn.href = triedURL; }
+    }
+
+    retryBtn.addEventListener('click', ()=>{ location.reload(); });
+
+    // ===== Query + paths =====
     function getRef(){
       const p = new URLSearchParams(location.search);
       const ref = (p.get('ref')||'').trim();
@@ -50,34 +173,51 @@
       return new URL(`assets/${encodeURIComponent(ref)}/`, location.href).href;
     }
 
+    // ===== Library checks =====
     function checkLibs(){
       if(typeof THREE === 'undefined') throw new Error('THREE undefined');
       if(!THREE.OrbitControls) throw new Error('OrbitControls missing');
-      // GLTF is preferred, but we also include OBJ/MTL as fallback
       if(!THREE.GLTFLoader) throw new Error('GLTFLoader missing');
-      if(!THREE.OBJLoader) console.warn('OBJLoader missing (fallback will not work).');
-      if(!THREE.MTLLoader) console.warn('MTLLoader missing (materials for OBJ will not work).');
+      // OBJ/MTL are optional fallbacks
     }
 
     let renderer, scene, camera, controls, model;
 
     function init(){
       document.title = '3D viewer';
-      try { checkLibs(); } catch(e){
-        showErr("Failed to load a required three.js script. Check your network/CSP and CDN reachability.");
+
+      // Initial loader UI
+      setLoadingUI('Preparing viewer…', 'Loading scripts', 8);
+
+      const ref = getRef();
+      lastRef = ref;
+
+      try { checkLibs(); }
+      catch(e){
+        showErrorOverlay("Failed to load a required three.js script. Check your network/CSP and CDN reachability.");
         console.error(e);
         return;
       }
 
-      const ref = getRef();
       if(!ref){
-        showErr(`No ref provided.\n\nPlease ensure that you are using an official link / QR Code`);
+        const msg = `No ref provided.
+
+Add ?ref=YourFolder to the URL.
+Example: viewer.html?ref=box
+
+Expected structure:
+assets/<ref>/
+  ├─ model.glb   (preferred)
+  ├─ model.obj
+  └─ model.mtl   (+ textures referenced in .mtl)`;
+        showErrorOverlay(msg);
         return;
       }
 
       // Scene setup
       const viewer = document.getElementById('viewer');
       const w = window.innerWidth, h = window.innerHeight;
+
       renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.setSize(w,h); viewer.appendChild(renderer.domElement);
@@ -111,18 +251,23 @@
       const folder = folderFor(ref); // e.g., .../assets/box/
       const glbUrl = new URL('model.glb', folder).href;
 
+      lastTriedURL = glbUrl;
+      setLoadingUI(`Loading “${ref}”`, 'GLB (model.glb)…', 12);
       toast(`Loading "${ref}" (GLB)…`);
-      console.log('Trying GLB:', glbUrl);
 
       const gltfLoader = new THREE.GLTFLoader();
       gltfLoader.load(glbUrl, (gltf)=>{
-        // GLB success
         model = gltf.scene || gltf.scenes?.[0];
-        if(!model){ showErr('GLB loaded but scene is empty.'); return; }
+        if(!model){ showErrorOverlay('GLB loaded but scene is empty.', glbUrl); return; }
         scene.add(model);
         normalizeModel(); frameModel();
         toast('GLB loaded');
-      }, undefined, (glbErr)=>{
+        setLoadingUI('Finalising…', 'Setting up camera & lights', 100);
+        setTimeout(hideOverlay, 180); // small grace so the user sees "done"
+      }, (ev)=>{
+        if (ev && ev.lengthComputable) setProgress(ev.loaded, ev.total);
+        else { progressPct.textContent='…'; }
+      }, (glbErr)=>{
         console.warn('GLB load failed, trying OBJ+MTL fallback.', glbErr);
         loadOBJWithMTL(ref, folder);
       });
@@ -131,13 +276,17 @@
     function loadOBJWithMTL(ref, folder){
       const objUrl = new URL('model.obj', folder).href;
       const mtlUrl = new URL('model.mtl', folder).href;
+      lastTriedURL = objUrl;
 
+      setLoadingUI(`Loading “${ref}”`, 'OBJ + MTL…', 18);
       toast(`Loading "${ref}" (OBJ+MTL)…`);
-      console.log('MTL:', mtlUrl);
-      console.log('OBJ:', objUrl);
 
       if(!THREE.MTLLoader || !THREE.OBJLoader){
-        showErr(`GLB not found and OBJ/MTL loaders missing.\nPlease provide model.glb in assets/${ref}/ or include MTL/OBJ loaders.`);
+        showErrorOverlay(`GLB not found and OBJ/MTL loaders missing.
+
+Provide model.glb in assets/${ref}/
+—or—
+Include MTLLoader/OBJLoader scripts.`, objUrl);
         return;
       }
 
@@ -154,9 +303,13 @@
           model = obj; scene.add(model);
           normalizeModel(); frameModel();
           toast('OBJ+MTL loaded');
-        }, undefined, (err)=>{
+          setLoadingUI('Finalising…', 'Setting up camera & lights', 100);
+          setTimeout(hideOverlay, 180);
+        }, (ev)=>{
+          if (ev && ev.lengthComputable) setProgress(ev.loaded, ev.total);
+        }, (err)=>{
           console.error('OBJ load error:', err);
-          showErr(errorNote(ref, objUrl, 'OBJ'));
+          showErrorOverlay(errorNote(ref, objUrl, 'OBJ (with .mtl)'), objUrl);
         });
       }, undefined, (mtlErr)=>{
         console.warn('MTL load failed, loading raw OBJ (grey).', mtlErr);
@@ -166,9 +319,13 @@
           model = obj; scene.add(model);
           normalizeModel(); frameModel();
           toast('OBJ loaded (no .mtl)');
-        }, undefined, (objErr)=>{
+          setLoadingUI('Finalising…', 'Setting up camera & lights', 100);
+          setTimeout(hideOverlay, 180);
+        }, (ev)=>{
+          if (ev && ev.lengthComputable) setProgress(ev.loaded, ev.total);
+        }, (objErr)=>{
           console.error('OBJ load error (fallback):', objErr);
-          showErr(errorNote(ref, objUrl, 'OBJ/MTL'));
+          showErrorOverlay(errorNote(ref, objUrl, 'OBJ/MTL'), objUrl);
         });
       });
     }
@@ -212,6 +369,7 @@ Check:
       camera.updateProjectionMatrix(); controls.update();
     }
 
+    // Kickoff
     window.addEventListener('DOMContentLoaded', init);
   </script>
 </body>
